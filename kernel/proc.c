@@ -694,3 +694,15 @@ procdump(void)
     printf("\n");
   }
 }
+
+
+// 获取进程数目
+int n_proc(void){
+  int n=0;
+  int i=0;
+  while(i<NPROC){
+    if(proc[i].state!=UNUSED)n++;
+    i++;
+  }
+  return n;
+}

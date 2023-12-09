@@ -80,3 +80,16 @@ kalloc(void)
     memset((char*)r, 5, PGSIZE); // fill with junk
   return (void*)r;
 }
+
+
+// 获取物理内存的剩余空间
+uint64 free_mem(void){
+  // 链表freelist，存储所有可用物理内存页的初始地址
+  struct run *r=kmem.freelist;
+  uint64 n=0;
+  while(r){
+    n++;
+    r=r->next;
+  }
+  return n*PGSIZE;
+}
