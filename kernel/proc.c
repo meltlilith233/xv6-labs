@@ -295,6 +295,7 @@ fork(void)
 
   np->state = RUNNABLE;
 
+  np->trace_mask=p->trace_mask;
   release(&np->lock);
 
   return pid;

@@ -95,3 +95,16 @@ sys_uptime(void)
   release(&tickslock);
   return xticks;
 }
+
+// trace syscall
+uint64
+sys_trace(void){
+  int trace_mask;
+  // 从a0寄存器取出系统调用的参数
+  if(argint(0, &trace_mask)<0){
+    return -1;
+  }
+  // trace系统调用功能：设置当前进程的trace_mask
+  myproc()->trace_mask=trace_mask;
+  return 0;
+}
