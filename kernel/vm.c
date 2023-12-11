@@ -5,6 +5,8 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
+#include "spinlock.h"
+#include "proc.h"
 
 /*
  * the kernel's page table.
@@ -23,6 +25,7 @@ kvminit()
 {
   kernel_pagetable = (pagetable_t) kalloc();
   memset(kernel_pagetable, 0, PGSIZE);
+  // 从以下kvmmap可以知道内核页表的虚拟地址都直接对应到映射地址
 
   // uart registers
   kvmmap(UART0, UART0, PGSIZE, PTE_R | PTE_W);
@@ -145,7 +148,10 @@ kvmpa(uint64 va)
   pte_t *pte;
   uint64 pa;
   
-  pte = walk(kernel_pagetable, va, 0);
+  // pte = walk(kernel_pagetable, va, 0);
+  // 改成从进程的内核页表中获取pte
+  pte = walk(myproc()->kpagetable, va, 0);
+
   if(pte == 0)
     panic("kvmpa");
   if((*pte & PTE_V) == 0)
@@ -172,7 +178,7 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
   last = PGROUNDDOWN(va + size - 1);
   for(;;){
     // walk调用：从页表中找到虚拟地址的pte，
-    // 若在页表中每找到，由于walk调用设置了alloc=1，因此会自动分配物理页
+    // 若在页表中没找到，由于walk调用设置了alloc=1，因此会自动分配物理页
     if((pte = walk(pagetable, a, 1)) == 0)
       return -1;
     if(*pte & PTE_V)
@@ -223,6 +229,7 @@ pagetable_t
 uvmcreate()
 {
   pagetable_t pagetable;
+  // 分配一个物理页作为页表
   pagetable = (pagetable_t) kalloc();
   if(pagetable == 0)
     return 0;
@@ -240,9 +247,12 @@ uvminit(pagetable_t pagetable, uchar *src, uint sz)
 
   if(sz >= PGSIZE)
     panic("inituvm: more than a page");
+  // 获取一个空闲的物理页
   mem = kalloc();
   memset(mem, 0, PGSIZE);
+  // 用户进程的虚拟内存空间刚开始只有[0, PGSIZE-1]被分配了物理页
   mappages(pagetable, 0, PGSIZE, (uint64)mem, PTE_W|PTE_R|PTE_X|PTE_U);
+  // memmove函数：将[src, src+sz-1]的内容复制到mem
   memmove(mem, src, sz);
 }
 
@@ -492,4 +502,50 @@ void _vmprint(pagetable_t pagetable, int level){
 void vmprint(pagetable_t pagetable){
   printf("page table %p\n", pagetable);
   _vmprint(pagetable, 1);
+}
+
+//对mappages调用进行封装，和kvmmap类似
+void
+ukvmmap(pagetable_t kpagetable, uint64 va, uint64 pa, uint64 sz, int perm)
+{
+  // mappages作用：为虚拟地址空间[va, va+sz-1]在页表中建立映射到物理地址pa
+  if(mappages(kpagetable, va, sz, pa, perm) != 0)
+    panic("ukvmmap");
+}
+
+// 为进程的内核态页表进行初始化，
+// 类似于内核页表的初始化：kvminit调用，为进程的内核态页表建立直接映射：
+pagetable_t
+ukvminit()
+{
+  pagetable_t kpagetable=uvmcreate();
+  if(kpagetable==0)return 0;
+  // uart registers
+  ukvmmap(kpagetable, UART0, UART0, PGSIZE, PTE_R | PTE_W);
+
+  // virtio mmio disk interface
+  ukvmmap(kpagetable,VIRTIO0, VIRTIO0, PGSIZE, PTE_R | PTE_W);
+
+  // CLINT
+  ukvmmap(kpagetable,CLINT, CLINT, 0x10000, PTE_R | PTE_W);
+
+  // PLIC
+  ukvmmap(kpagetable,PLIC, PLIC, 0x400000, PTE_R | PTE_W);
+
+  // map kernel text executable and read-only.
+  ukvmmap(kpagetable,KERNBASE, KERNBASE, (uint64)etext-KERNBASE, PTE_R | PTE_X);
+
+  // map kernel data and the physical RAM we'll make use of.
+  ukvmmap(kpagetable,(uint64)etext, (uint64)etext, PHYSTOP-(uint64)etext, PTE_R | PTE_W);
+
+  // map the trampoline for trap entry/exit to
+  // the highest virtual address in the kernel.
+  ukvmmap(kpagetable,TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
+  return kpagetable;
+}
+
+// 类似于kvminithart调用，设置根页表的地址到satp寄存器
+void proc_inithart(pagetable_t kpagetable){
+  w_satp(MAKE_SATP(kpagetable));
+  sfence_vma();
 }

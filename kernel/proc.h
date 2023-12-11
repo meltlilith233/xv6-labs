@@ -103,4 +103,8 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+
+  // 新增一个进程进入内核态的时用的页表
+  // 因为进入内核态后，内核页表并没有记录当前进程的映射关系
+  pagetable_t kpagetable;
 };

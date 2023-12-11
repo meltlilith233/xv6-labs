@@ -28,18 +28,25 @@ procinit(void)
   struct proc *p;
   
   initlock(&pid_lock, "nextpid");
+  // 遍历进程池中的进程
   for(p = proc; p < &proc[NPROC]; p++) {
       initlock(&p->lock, "proc");
 
       // Allocate a page for the process's kernel stack.
       // Map it high in memory, followed by an invalid
       // guard page.
-      char *pa = kalloc();
-      if(pa == 0)
-        panic("kalloc");
-      uint64 va = KSTACK((int) (p - proc));
-      kvmmap(va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
-      p->kstack = va;
+
+      // lab-kpagetable: 这部分代码要迁移到allocproc函数内
+      // char *pa = kalloc();
+      // if(pa == 0)
+      //   panic("kalloc");
+      // uint64 va = KSTACK((int) (p - proc));
+      // // 为每一个进程的内核栈分配物理页，并映射到内核页表
+      // kvmmap(va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
+      // // 进程的内核栈仅在内核态时使用，
+      // // 在内核态时，由于satp寄存器用的是内核页表，
+      // // 因此这个虚拟地址va是内核地址空间的地址，而并不是用户地址空间的地址
+      // p->kstack = va;
   }
   kvminithart();
 }
@@ -94,6 +101,7 @@ allocproc(void)
 {
   struct proc *p;
 
+  // 遍历进程表，查找是否有状态为UNUSED的进程
   for(p = proc; p < &proc[NPROC]; p++) {
     acquire(&p->lock);
     if(p->state == UNUSED) {
@@ -115,11 +123,29 @@ found:
 
   // An empty user page table.
   p->pagetable = proc_pagetable(p);
-  if(p->pagetable == 0){
+  if(p->pagetable == 0){// 如果内存分配失败
     freeproc(p);
     release(&p->lock);
     return 0;
   }
+
+  // 为进程分配进入内核态时用的页表
+  p->kpagetable=ukvminit();
+  if(p->kpagetable==0){
+    freeproc(p);
+    release(&p->lock);
+    return 0;
+  }
+  // 初始化内核栈
+  char *pa = kalloc();
+  if(pa == 0)
+    panic("kalloc");
+  uint64 va = KSTACK((int) (p - proc));
+  // 为每一个进程的内核栈分配物理页，并映射到内核页表
+  ukvmmap(p->kpagetable, va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
+  // 此时satp寄存器用的是进程的内核态页表，
+  // 因此这个虚拟地址va是用户的内核态地址空间的地址
+  p->kstack = va;
 
   // Set up new context to start executing at forkret,
   // which returns to user space.
@@ -142,6 +168,16 @@ freeproc(struct proc *p)
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
   p->pagetable = 0;
+
+  // 释放进程内核页表的内核栈，因为此时kstack是在kpagetable中申请的
+  uvmunmap(p->kpagetable, p->kstack, 1, 1);
+  p->kstack=0;
+  // 释放进程的内核页表
+  if(p->kpagetable){
+    proc_freekpagetable(p->kpagetable);
+  }
+  p->kpagetable=0;
+
   p->sz = 0;
   p->pid = 0;
   p->parent = 0;
@@ -193,6 +229,22 @@ proc_freepagetable(pagetable_t pagetable, uint64 sz)
   uvmunmap(pagetable, TRAMPOLINE, 1, 0);
   uvmunmap(pagetable, TRAPFRAME, 1, 0);
   uvmfree(pagetable, sz);
+}
+
+// 释放进程的内核页表
+void proc_freekpagetable(pagetable_t kpagetable){
+  for (int i = 0; i < 512; i++) {
+    pte_t pte = kpagetable[i];
+    if (pte & PTE_V) {
+      kpagetable[i] = 0;
+      // 只释放用于存储页表的物理页
+      if ((pte & (PTE_R | PTE_W | PTE_X)) == 0) {
+        uint64 child = PTE2PA(pte);
+        proc_freekpagetable((pagetable_t)child);
+      }
+    }
+  }
+  kfree((void*)kpagetable);
 }
 
 // a user program that calls exec("/init")
@@ -473,10 +525,14 @@ scheduler(void)
         // before jumping back to us.
         p->state = RUNNING;
         c->proc = p;
+        // 在切换前设置satp寄存器为进程的内核页表
+        proc_inithart(p->kpagetable);
+        // 上下文切换：当前cpu的上下文切换为p的上下文
         swtch(&c->context, &p->context);
 
         // Process is done running for now.
         // It should have changed its p->state before coming back.
+        kvminithart();
         c->proc = 0;
 
         found = 1;
