@@ -20,7 +20,7 @@ struct run {
 
 struct {
   struct spinlock lock;
-  struct run *freelist;
+  struct run *freelist; // freelist：链表，连接着空闲地址（以页表大小为单位进行分配和释放）
 } kmem;
 
 void
@@ -57,6 +57,7 @@ kfree(void *pa)
   r = (struct run*)pa;
 
   acquire(&kmem.lock);
+  // freelist新增一个空闲地址
   r->next = kmem.freelist;
   kmem.freelist = r;
   release(&kmem.lock);
@@ -71,6 +72,7 @@ kalloc(void)
   struct run *r;
 
   acquire(&kmem.lock);
+  // 分配一个空闲页
   r = kmem.freelist;
   if(r)
     kmem.freelist = r->next;

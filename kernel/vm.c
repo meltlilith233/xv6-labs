@@ -74,17 +74,30 @@ walk(pagetable_t pagetable, uint64 va, int alloc)
   if(va >= MAXVA)
     panic("walk");
 
+  // 3级页表，每9位代表一个页表索引，遍历：
+  // 注意，每一个页表都占用一个物理页的空间大小
   for(int level = 2; level > 0; level--) {
+    // 宏定义PX：用于获取第i级页表的索引
     pte_t *pte = &pagetable[PX(level, va)];
-    if(*pte & PTE_V) {
+    if(*pte & PTE_V) { // 如果*pte存在
+      // 宏定义PTE2PA：将pte转化成物理地址
+      // 具体地，pte的低10位为标志位，高44位为PPN
+      // 因此该宏定义只需要左移10位然后右移12位即可
+      // 这个操作实际是获取下一级页表的物理地址
       pagetable = (pagetable_t)PTE2PA(*pte);
-    } else {
+    } else {// 如果*pte不存在，则根据alloc判断是否允许分配内存
+      // 若alloc=0，则不分配内存，因为“或”运算检测到第一个为真后就不再看后面的判断
+      // 若alloc=1，则分配内存：kalloc分配一个物理页
+        // 如果分配失败，则返回0
+        // 如果分配成功，那就分配
       if(!alloc || (pagetable = (pde_t*)kalloc()) == 0)
         return 0;
       memset(pagetable, 0, PGSIZE);
+      // 新分配的物理页装入pte
       *pte = PA2PTE(pagetable) | PTE_V;
     }
   }
+  // 返回最低一级的PTE地址
   return &pagetable[PX(0, va)];
 }
 
@@ -148,19 +161,29 @@ kvmpa(uint64 va)
 int
 mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
 {
+  // 为虚拟地址空间[va, va+size-1]在页表中建立映射到物理地址
   uint64 a, last;
+  // 页表的每一项就是pte，
   pte_t *pte;
 
+  // 宏定义PGROUNDDOWN：将地址的低12位置0
+  // 页表大小为4KB，因此虚拟地址和物理地址的低12位均表示页内偏移量
   a = PGROUNDDOWN(va);
   last = PGROUNDDOWN(va + size - 1);
   for(;;){
+    // walk调用：从页表中找到虚拟地址的pte，
+    // 若在页表中每找到，由于walk调用设置了alloc=1，因此会自动分配物理页
     if((pte = walk(pagetable, a, 1)) == 0)
       return -1;
     if(*pte & PTE_V)
       panic("remap");
+    // 物理地址共56位，低12位表示页内偏移，高44位表示物理页码PPN
+    // 页表中的每一项PTE存的东西就是44位的物理页码PPN和10位的状态标志
+    // 找到va对应的PTE后，为其建立va->pa的映射关系
     *pte = PA2PTE(pa) | perm | PTE_V;
     if(a == last)
       break;
+    // 以页为单位建立映射
     a += PGSIZE;
     pa += PGSIZE;
   }
@@ -439,4 +462,34 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
   } else {
     return -1;
   }
+}
+
+// pagetable_t即uint64*，是页表数组的物理地址
+void _vmprint(pagetable_t pagetable, int level){
+  // 参考freewalk函数：
+  // 遍历页表的每一项
+  // 页表大小为4096B，每项为64B（uint64）
+  // 因此共页表共512项PTE
+  for(int i=0; i<512; i++){
+    pte_t pte=pagetable[i];
+    if (pte & PTE_V) {
+      // 获取pte的物理地址：
+      uint64 pa = PTE2PA(pte);
+      // 输出控制
+      for (int j = 0; j < level; j++) {
+        if (j) printf(" ");
+        printf("..");
+      }
+      printf("%d: pte %p pa %p\n", i, pte, pa);
+      // 如果pte不可读写执行，说明该pte指向的是一个页表，则继续递归打印
+      if ((pte & (PTE_R | PTE_W | PTE_X)) == 0) {
+        _vmprint((pagetable_t)pa, level+1);
+      }
+    }
+  }
+}
+
+void vmprint(pagetable_t pagetable){
+  printf("page table %p\n", pagetable);
+  _vmprint(pagetable, 1);
 }
