@@ -33,6 +33,11 @@ copyin_new(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
 
   if (srcva >= p->sz || srcva+len >= p->sz || srcva+len < srcva)
     return -1;
+  
+  // copyin_new之所以可以直接memmove，是因为在上一个实验中,
+  // 已经在scheduler()中设置好进程进入内核态后使用的是进程的内核页表,
+  // 因此此时的srcva可以直接使用，而无需转换为物理地址,
+  // 因为进程的内核页表中是有着相应的映射关系的
   memmove((void *) dst, (void *)srcva, len);
   stats.ncopyin++;   // XXX lock
   return 0;

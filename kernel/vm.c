@@ -77,18 +77,18 @@ walk(pagetable_t pagetable, uint64 va, int alloc)
   if(va >= MAXVA)
     panic("walk");
 
-  // 3级页表，每9位代表一个页表索引，遍历：
+  // 3级页表，每9位代表一个页表索引，仅遍历前两级页表，从而找到最后一级页表
   // 注意，每一个页表都占用一个物理页的空间大小
   for(int level = 2; level > 0; level--) {
     // 宏定义PX：用于获取第i级页表的索引
     pte_t *pte = &pagetable[PX(level, va)];
-    if(*pte & PTE_V) { // 如果*pte存在
+    if(*pte & PTE_V) { // 如果*pte有效
       // 宏定义PTE2PA：将pte转化成物理地址
       // 具体地，pte的低10位为标志位，高44位为PPN
       // 因此该宏定义只需要左移10位然后右移12位即可
       // 这个操作实际是获取下一级页表的物理地址
       pagetable = (pagetable_t)PTE2PA(*pte);
-    } else {// 如果*pte不存在，则根据alloc判断是否允许分配内存
+    } else {// 如果pte无效，则根据alloc判断是否允许分配内存
       // 若alloc=0，则不分配内存，因为“或”运算检测到第一个为真后就不再看后面的判断
       // 若alloc=1，则分配内存：kalloc分配一个物理页
         // 如果分配失败，则返回0
@@ -100,7 +100,9 @@ walk(pagetable_t pagetable, uint64 va, int alloc)
       *pte = PA2PTE(pagetable) | PTE_V;
     }
   }
-  // 返回最低一级的PTE地址
+  // 返回最后一级页表中va对应的PTE
+  // 注意：walk只负责给页表分配物理页，walk并不管该pte是否被实际分配过物理页，
+  // 而是交给调用walk的函数进行判断，例如交给mappages进行实际的kalloc
   return &pagetable[PX(0, va)];
 }
 
@@ -178,9 +180,11 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
   last = PGROUNDDOWN(va + size - 1);
   for(;;){
     // walk调用：从页表中找到虚拟地址的pte，
-    // 若在页表中没找到，由于walk调用设置了alloc=1，因此会自动分配物理页
+    // 正常来说，在页表中找不到该虚拟地址对应的pte，但由于walk调用设置了alloc=1，因此会自动分配物理页
     if((pte = walk(pagetable, a, 1)) == 0)
       return -1;
+    
+    // 若直接在页表中找到该pte，说明发生了之前已经建立过映射了，属于重映射
     if(*pte & PTE_V)
       panic("remap");
     // 物理地址共56位，低12位表示页内偏移，高44位表示物理页码PPN
@@ -412,23 +416,24 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 int
 copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
 {
-  uint64 n, va0, pa0;
+  return copyin_new(pagetable, dst, srcva, len);
+  // uint64 n, va0, pa0;
 
-  while(len > 0){
-    va0 = PGROUNDDOWN(srcva);
-    pa0 = walkaddr(pagetable, va0);
-    if(pa0 == 0)
-      return -1;
-    n = PGSIZE - (srcva - va0);
-    if(n > len)
-      n = len;
-    memmove(dst, (void *)(pa0 + (srcva - va0)), n);
+  // while(len > 0){
+  //   va0 = PGROUNDDOWN(srcva);
+  //   pa0 = walkaddr(pagetable, va0);
+  //   if(pa0 == 0)
+  //     return -1;
+  //   n = PGSIZE - (srcva - va0);
+  //   if(n > len)
+  //     n = len;
+  //   memmove(dst, (void *)(pa0 + (srcva - va0)), n);
 
-    len -= n;
-    dst += n;
-    srcva = va0 + PGSIZE;
-  }
-  return 0;
+  //   len -= n;
+  //   dst += n;
+  //   srcva = va0 + PGSIZE;
+  // }
+  // return 0;
 }
 
 // Copy a null-terminated string from user to kernel.
@@ -438,40 +443,41 @@ copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
 int
 copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
 {
-  uint64 n, va0, pa0;
-  int got_null = 0;
+  return copyinstr_new(pagetable, dst, srcva, max);
+  // uint64 n, va0, pa0;
+  // int got_null = 0;
 
-  while(got_null == 0 && max > 0){
-    va0 = PGROUNDDOWN(srcva);
-    pa0 = walkaddr(pagetable, va0);
-    if(pa0 == 0)
-      return -1;
-    n = PGSIZE - (srcva - va0);
-    if(n > max)
-      n = max;
+  // while(got_null == 0 && max > 0){
+  //   va0 = PGROUNDDOWN(srcva);
+  //   pa0 = walkaddr(pagetable, va0);
+  //   if(pa0 == 0)
+  //     return -1;
+  //   n = PGSIZE - (srcva - va0);
+  //   if(n > max)
+  //     n = max;
 
-    char *p = (char *) (pa0 + (srcva - va0));
-    while(n > 0){
-      if(*p == '\0'){
-        *dst = '\0';
-        got_null = 1;
-        break;
-      } else {
-        *dst = *p;
-      }
-      --n;
-      --max;
-      p++;
-      dst++;
-    }
+  //   char *p = (char *) (pa0 + (srcva - va0));
+  //   while(n > 0){
+  //     if(*p == '\0'){
+  //       *dst = '\0';
+  //       got_null = 1;
+  //       break;
+  //     } else {
+  //       *dst = *p;
+  //     }
+  //     --n;
+  //     --max;
+  //     p++;
+  //     dst++;
+  //   }
 
-    srcva = va0 + PGSIZE;
-  }
-  if(got_null){
-    return 0;
-  } else {
-    return -1;
-  }
+  //   srcva = va0 + PGSIZE;
+  // }
+  // if(got_null){
+  //   return 0;
+  // } else {
+  //   return -1;
+  // }
 }
 
 // pagetable_t即uint64*，是页表数组的物理地址
@@ -548,4 +554,28 @@ ukvminit()
 void proc_inithart(pagetable_t kpagetable){
   w_satp(MAKE_SATP(kpagetable));
   sfence_vma();
+}
+
+
+void u2kvmcopy(pagetable_t upagetable, pagetable_t kpagetable, uint64 srcva, uint64 dstva){
+  // 对齐页
+  srcva=PGROUNDUP(srcva);
+  pte_t* pte_u;
+  pte_t* pte_k;
+  // 将用户页表的地址范围[srcva, dstva]的页表映射关系复制到进程的内核页表中
+  for(uint64 va=srcva; va<dstva; va+=PGSIZE){
+    // 获取va对应的pte
+    // 用户页表设置alloc=0，即不自动分配页表空间
+    pte_u=walk(upagetable, va, 0);
+    if(pte_u==0)panic("u2kvmcopy: src pte do not exist");
+    // 进程的内核页表alloc=1，即自动分配页表空间
+    pte_k=walk(kpagetable, va, 1);
+    if(pte_k==0)panic("u2kvmcopy: dest pte walk fail");
+    // 获取va对应的物理地址
+    uint64 pa=PTE2PA(*pte_u);
+    // PTE标志位
+    uint flag=(PTE_FLAGS(*pte_u)) & (~PTE_U);
+    // 将映射关系存入内核页表
+    *pte_k=PA2PTE(pa) | flag;
+  }
 }

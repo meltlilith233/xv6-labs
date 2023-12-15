@@ -264,14 +264,20 @@ void
 userinit(void)
 {
   struct proc *p;
-
   p = allocproc();
   initproc = p;
   
   // allocate one user page and copy init's instructions
   // and data into it.
+  // 将initcode.S的代码分配给用户页表的[0,sizeof(initcode)]，即第一个页
   uvminit(p->pagetable, initcode, sizeof(initcode));
   p->sz = PGSIZE;
+
+
+  // 其他进程可以通过exec或fork系统调用创建，但init进程并不是，
+  // init进程是第一个用户进程，它由内核直接创建并初始化
+  // 因此必须在初始化时就将用户页表的映射关系复制到进程的内核页表
+  u2kvmcopy(p->pagetable, p->kpagetable, 0, p->sz);
 
   // prepare for the very first "return" from kernel to user.
   p->trapframe->epc = 0;      // user program counter
@@ -295,9 +301,16 @@ growproc(int n)
 
   sz = p->sz;
   if(n > 0){
+    // 注意，此时处于内核态，且用的是进程的内核页表
+    // 不能让用户的虚拟地址范围与内核重叠：
+    if(PGROUNDUP(sz+n)>=PLIC){
+      return -1;
+    }
     if((sz = uvmalloc(p->pagetable, sz, sz + n)) == 0) {
       return -1;
     }
+    // 如果分配成功，则将新分配的空间复制到进程的内核页表
+    u2kvmcopy(p->pagetable, p->kpagetable, sz-n, sz);
   } else if(n < 0){
     sz = uvmdealloc(p->pagetable, sz, sz + n);
   }
@@ -318,7 +331,6 @@ fork(void)
   if((np = allocproc()) == 0){
     return -1;
   }
-
   // Copy user memory from parent to child.
   if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0){
     freeproc(np);
@@ -326,6 +338,9 @@ fork(void)
     return -1;
   }
   np->sz = p->sz;
+
+  // 复制新进程的内核页表
+  u2kvmcopy(np->pagetable, np->kpagetable, 0, np->sz);
 
   np->parent = p;
 
@@ -525,7 +540,9 @@ scheduler(void)
         // before jumping back to us.
         p->state = RUNNING;
         c->proc = p;
-        // 在切换前设置satp寄存器为进程的内核页表
+
+        // 在切换前设置satp寄存器为进程的内核页表，
+        // 注意，此时仍处于内核态，因此修改的是CPU处于内核态时的上下文
         proc_inithart(p->kpagetable);
         // 上下文切换：当前cpu的上下文切换为p的上下文
         swtch(&c->context, &p->context);
