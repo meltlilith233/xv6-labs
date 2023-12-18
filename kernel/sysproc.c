@@ -70,6 +70,7 @@ sys_sleep(void)
     sleep(&ticks, &tickslock);
   }
   release(&tickslock);
+  backtrace();
   return 0;
 }
 
@@ -94,4 +95,26 @@ sys_uptime(void)
   xticks = ticks;
   release(&tickslock);
   return xticks;
+}
+
+// sigalarm系统调用：只需要保存传进来的参数
+uint64 sys_sigalarm(void){
+  struct proc* p=myproc();
+  // 从a0寄存器取出系统调用参数ticks
+  if(argint(0, &p->ticks_interval)<0){
+    return -1;
+  }
+  // 从a1寄存器取出系统调用参数handler
+  if(argaddr(1, (uint64*)&p->handler)<0){
+    return -1;
+  }
+  return 0;
+}
+
+
+uint64 sys_sigreturn(void){
+  // sigalarm设置的函数执行完毕，恢复原陷阱帧
+  memmove(myproc()->trapframe, myproc()->alarm_trapframe, sizeof(struct trapframe));
+  myproc()->is_handling=0;
+  return 0;
 }

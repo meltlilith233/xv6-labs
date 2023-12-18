@@ -108,6 +108,7 @@ found:
   p->pid = allocpid();
 
   // Allocate a trapframe page.
+  // 陷阱帧：当发生中断时，将当前进程的寄存器保存到陷阱帧中，以便恢复！
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
     release(&p->lock);
     return 0;
@@ -126,6 +127,17 @@ found:
   memset(&p->context, 0, sizeof(p->context));
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
+
+  // 为新增的陷阱帧分配物理页
+  if((p->alarm_trapframe=(struct trapframe*)kalloc())==0){
+    freeproc(p);
+    release(&p->lock);
+    return 0;
+  }
+  p->ticks_interval=0;
+  p->ticks=0;
+  p->handler=0;
+  p->is_handling=0;
 
   return p;
 }
@@ -150,6 +162,15 @@ freeproc(struct proc *p)
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
+
+  // 释放资源
+  if(p->alarm_trapframe)
+    kfree((void*)p->alarm_trapframe);
+  p->alarm_trapframe=0;
+  p->ticks_interval=0;
+  p->ticks=0;
+  p->handler=0;
+  p->is_handling=0;
 }
 
 // Create a user page table for a given process,
@@ -168,6 +189,7 @@ proc_pagetable(struct proc *p)
   // at the highest user virtual address.
   // only the supervisor uses it, on the way
   // to/from user space, so not PTE_U.
+  // 对于虚拟地址TRAMPOLINE，进程和内核都映射到相同的物理地址trampoline.S
   if(mappages(pagetable, TRAMPOLINE, PGSIZE,
               (uint64)trampoline, PTE_R | PTE_X) < 0){
     uvmfree(pagetable, 0);

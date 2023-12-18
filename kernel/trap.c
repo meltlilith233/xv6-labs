@@ -77,8 +77,24 @@ usertrap(void)
     exit(-1);
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2)
+  // 时钟中断
+  if(which_dev == 2){
+    if(p->ticks_interval!=0 && ++p->ticks==p->ticks_interval && p->is_handling==0){
+      // 由于接下来用户进程需要运行sigalarm设置的函数，因此需保存当前的陷阱帧，
+      // 以便恢复执行完毕后恢复
+      memmove(p->alarm_trapframe, p->trapframe, sizeof(struct trapframe));
+      // 陷阱帧trapframe：当用户进程陷入内核后，
+      // 在trampoline.S中uservec中，会将当前进程的寄存器存到陷阱帧处(虚拟地址TRAPFRAME)
+      // trapframe->epc：返回时，usertrapret()会把该值存入sepc寄存器，
+      // 如此，当使用sret返回用户空间时，pc=sepc，即epc设置的是返回到用户态时执行的代码
+      p->trapframe->epc=(uint64)p->handler;
+      // 标识当前进程正在运行sigalarm设置的函数，防止重复触发
+      p->is_handling=1;
+      // 滴答数重新置0
+      p->ticks=0;
+    }
     yield();
+  }
 
   usertrapret();
 }
