@@ -50,7 +50,8 @@ usertrap(void)
   // save user program counter.
   p->trapframe->epc = r_sepc();
   
-  if(r_scause() == 8){
+  uint64 scause=r_scause();
+  if(scause == 8){
     // system call
 
     if(p->killed)
@@ -67,6 +68,28 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
+  } else if(scause==13 || scause==15){// 13和15对应页面错误
+    // stval寄存器中保存了造成页面错误的虚拟地址
+    uint64 va=r_stval();
+    // 判断虚拟地址是否位于用户堆内存空间
+    // 如果超过了最大虚拟地址p->sz, 
+    // 或者小于堆底部(堆位于用户栈上方)，则属于非法访问
+    if(va>=p->sz || va<PGROUNDUP(p->trapframe->sp)){
+      p->killed=1;
+    }else{
+      char* pa;
+      if((pa=kalloc())!=0){
+        memset(pa, 0, PGSIZE);
+        // 将刚分配的物理页映射到虚拟地址va对应的页PGROUNDDOWN(va)
+        if(mappages(p->pagetable, PGROUNDDOWN(va), PGSIZE, (uint64)pa, PTE_R | PTE_W | PTE_X | PTE_U)!=0){
+          kfree(pa);
+          p->killed=1;
+        }
+      }else{
+        p->killed=1;
+      }
+    }
+
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());

@@ -68,6 +68,32 @@ int
 argaddr(int n, uint64 *ip)
 {
   *ip = argraw(n);
+  // 由于延迟分配机制，
+  // 系统调用传入的虚拟地址*ip可能未被分配物理内存
+  // 又因为此时已经处于内核态，因此不会再因为页面错误陷入usertrap
+  // 因此为了防止内核直接崩溃，
+  // 需要对系统调用传入的虚拟地址进行判断：
+
+  struct proc* p=myproc();
+  // walkaddr函数：返回页表中虚拟地址对应的物理地址
+  if(walkaddr(p->pagetable, *ip)==0){
+    // 若walkaddr返回值为0，说明系统调用传入的虚拟地址尚未被分配物理内存
+    // 判断虚拟地址*ip是否合法：即是否处于用户堆空间中
+    if(PGROUNDUP(p->trapframe->sp)<=*ip && *ip<p->sz){
+      // 若合法，则分配物理内存
+      char* pa=kalloc();
+      if(pa==0)return-1;
+      memset(pa, 0, PGSIZE);
+      // 将该物理页映射到进程虚拟地址*ip对应的页地址PGROUNDDOWN(*ip)
+      if(mappages(p->pagetable, PGROUNDDOWN(*ip), PGSIZE, (uint64)pa, PTE_R| PTE_W | PTE_X | PTE_U)!=0){
+        kfree(pa);
+        return -1;
+      }
+    }else{
+      return -1;
+    }
+  }
+
   return 0;
 }
 

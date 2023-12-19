@@ -46,9 +46,21 @@ sys_sbrk(void)
 
   if(argint(0, &n) < 0)
     return -1;
-  addr = myproc()->sz;
-  if(growproc(n) < 0)
-    return -1;
+  struct proc* p=myproc();
+  addr = p->sz;
+  // 这段代码注释掉，不进行实际的物理内存分配
+  // if(growproc(n) < 0)
+  //   return -1;
+  
+  if(n>0){
+    // 若要增大内存，则延迟分配
+    // 只增大进程的内存空间字段值，但不进行实际的内存分配
+    // 等到以后要用时，抛出页表错误后再进行物理内存的分配！
+    p->sz=p->sz+n;
+  }else if(n<0){
+    // 若要缩减内存，则调用uvmdealloc()缩减物理内存
+    p->sz=uvmdealloc(p->pagetable, p->sz, p->sz+n);
+  }
   return addr;
 }
 

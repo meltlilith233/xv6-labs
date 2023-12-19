@@ -268,6 +268,7 @@ fork(void)
   }
 
   // Copy user memory from parent to child.
+  // 父进程可能存在未实际分配的内存
   if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0){
     freeproc(np);
     release(&np->lock);

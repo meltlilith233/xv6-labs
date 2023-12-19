@@ -178,12 +178,27 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
 
   if((va % PGSIZE) != 0)
     panic("uvmunmap: not aligned");
-
+  
+  // 由于延迟分配机制，可能出现部分内存尚未被分配空间就被释放的情况
+  // 因此需要更改此处的代码，防止内核崩溃
   for(a = va; a < va + npages*PGSIZE; a += PGSIZE){
-    if((pte = walk(pagetable, a, 0)) == 0)
-      panic("uvmunmap: walk");
-    if((*pte & PTE_V) == 0)
-      panic("uvmunmap: not mapped");
+    // walk找到虚拟地址a对应的pte
+    if((pte = walk(pagetable, a, 0)) == 0){
+      // panic("uvmunmap: walk");
+      // walk调用返回值为0的情况：
+      // 是因为alloc参数设为了0，
+      // 且不存在的pte处于一个尚未被分配物理页的页表时的情况
+      // 不使内核崩溃，而是直接略过即可，因为这是延迟分配机制必然会出现的情况
+      continue;
+    }
+    
+    // 如果该pte项无映射关系：
+    if((*pte & PTE_V) == 0){
+      // 不再使内核崩溃，而是直接略过
+      // panic("uvmunmap: not mapped");
+      continue;
+    }
+
     if(PTE_FLAGS(*pte) == PTE_V)
       panic("uvmunmap: not a leaf");
     if(do_free){
@@ -314,10 +329,21 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   char *mem;
 
   for(i = 0; i < sz; i += PGSIZE){
-    if((pte = walk(old, i, 0)) == 0)
-      panic("uvmcopy: pte should exist");
-    if((*pte & PTE_V) == 0)
-      panic("uvmcopy: page not present");
+    // 父进程的内存空间中，可能存在仍未被实际分配的内存页
+    // 对于这些仍待分配的内存，不需要复制到子进程的内存空间中
+    // 因此直接跳过：
+    if((pte = walk(old, i, 0)) == 0){
+      // panic("uvmcopy: pte should exist");
+      // walk调用返回值为0的情况：
+      // 是因为alloc参数设为了0，
+      // 且不存在的pte处于一个尚未被分配物理页的页表时的情况
+      // 不使内核崩溃，而是直接略过即可，因为这是延迟分配机制必然会出现的情况
+      continue;
+    }
+    if((*pte & PTE_V) == 0){
+      // panic("uvmcopy: page not present");
+      continue;
+    }
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
     if((mem = kalloc()) == 0)
