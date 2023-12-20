@@ -331,6 +331,11 @@ sfence_vma()
 #define PTE_W (1L << 2)
 #define PTE_X (1L << 3)
 #define PTE_U (1L << 4) // 1 -> user can access
+// PTE中，标识位的高2位为保留位（reserved for software)
+// 我们将其中1bit来标记PTE是否为COW映射
+#define PTE_COW (1L << 8)
+// 获取pa对应的页的数组索引，用于kref
+#define COW_INDEX(pa) (((uint64)(pa) - KERNBASE) >> 12)
 
 // shift a physical address to the right place for a PTE.
 #define PA2PTE(pa) ((((uint64)pa) >> 12) << 10)

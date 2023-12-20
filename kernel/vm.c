@@ -311,22 +311,25 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   pte_t *pte;
   uint64 pa, i;
   uint flags;
-  char *mem;
 
+  // copy on write：
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
       panic("uvmcopy: pte should exist");
     if((*pte & PTE_V) == 0)
       panic("uvmcopy: page not present");
     pa = PTE2PA(*pte);
+    // pte设置COW标记，且为不可写
+    *pte=(*pte & ~PTE_W) | PTE_COW;
     flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
-      goto err;
-    memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
-      kfree(mem);
+
+    // 懒人策略：需要复制时，先共享着一段物理内存，不做实际复制操作，
+    // 虽然进程间内存隔离，但只读的话是不会有问题的，而如果其中一方需要写内容，
+    // 在共享内存中所做得更改显然会连累到另一方，这是不可取的，此时再做复制即可
+    if(mappages(new, i, PGSIZE, pa, flags) != 0){
       goto err;
     }
+    krefplus(pa);
   }
   return 0;
 
@@ -351,16 +354,28 @@ uvmclear(pagetable_t pagetable, uint64 va)
 // Copy from kernel to user.
 // Copy len bytes from src to virtual address dstva in a given page table.
 // Return 0 on success, -1 on error.
+
+// copy on write：写时才复制，读不用，因此不用改copyin
 int
 copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 {
   uint64 n, va0, pa0;
 
   while(len > 0){
+    // 对齐页
     va0 = PGROUNDDOWN(dstva);
-    pa0 = walkaddr(pagetable, va0);
-    if(pa0 == 0)
+    if(va0>=MAXVA)return -1;
+    pte_t *pte=walk(pagetable, va0, 0);
+    if(pte==0 || (*pte & PTE_V)==0 || (*pte & PTE_U)==0){ 
       return -1;
+    }
+    pa0=PTE2PA(*pte);
+    // 如果va0映射的是COW页，则需要分配物理页
+    // 因为接下来要写入内容了！
+    if(PTE_FLAGS(*pte) & PTE_COW){
+      pa0=(uint64)cow_alloc(pagetable, va0);
+    }
+
     n = PGSIZE - (dstva - va0);
     if(n > len)
       n = len;

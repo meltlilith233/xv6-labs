@@ -124,7 +124,7 @@ sys_link(void)
 
   if(argstr(0, old, MAXPATH) < 0 || argstr(1, new, MAXPATH) < 0)
     return -1;
-
+  
   begin_op();
   if((ip = namei(old)) == 0){
     end_op();
