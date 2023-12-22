@@ -31,6 +31,24 @@ barrier()
   // then increment bstate.round.
   //
   
+  pthread_mutex_lock(&bstate.barrier_mutex);
+  // 阻挡的线程数+1
+  bstate.nthread++;
+  if(bstate.nthread==nthread){
+    // 如果有足够的线程到达，则进入下一轮
+    bstate.round++;
+    bstate.nthread=0;
+    // 唤醒被阻挡的所有线程
+    pthread_cond_broadcast(&bstate.barrier_cond);
+  }else{
+    // 如果还没有足够的线程，则：
+    // 条件变量：释放锁然后让出计算资源
+    pthread_cond_wait(&bstate.barrier_cond, &bstate.barrier_mutex);
+    // 注意此处线程被唤醒后，会重新获得锁：
+
+  }
+  // 释放锁：
+  pthread_mutex_unlock(&bstate.barrier_mutex);
 }
 
 static void *

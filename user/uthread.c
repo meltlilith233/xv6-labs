@@ -10,10 +10,29 @@
 #define STACK_SIZE  8192
 #define MAX_THREAD  4
 
+// 线程上下文：代表一个执行流
+struct thread_context {
+  uint64 ra;
+  uint64 sp;
+  uint64 s0;
+  uint64 s1;
+  uint64 s2;
+  uint64 s3;
+  uint64 s4;
+  uint64 s5;
+  uint64 s6;
+  uint64 s7;
+  uint64 s8;
+  uint64 s9;
+  uint64 s10;
+  uint64 s11;
+};
+
 
 struct thread {
   char       stack[STACK_SIZE]; /* the thread's stack */
   int        state;             /* FREE, RUNNING, RUNNABLE */
+  struct thread_context context; /* 线程上下文 */
 
 };
 struct thread all_thread[MAX_THREAD];
@@ -63,6 +82,10 @@ thread_schedule(void)
      * Invoke thread_switch to switch from t to next_thread:
      * thread_switch(??, ??);
      */
+
+    // 线程上下文切换：thread_switch()
+    // 即将当前执行流保存到t->context，cpu加载current_thread->context作为新的执行流
+    thread_switch((uint64)&t->context, (uint64)&current_thread->context);
   } else
     next_thread = 0;
 }
@@ -77,6 +100,12 @@ thread_create(void (*func)())
   }
   t->state = RUNNABLE;
   // YOUR CODE HERE
+
+  // ra寄存器：return address register
+  t->context.ra=(uint64)func;
+  // sp寄存器：stack pointer register
+  // 注意是从上到下，因此为：
+  t->context.sp=(uint64)t->stack+STACK_SIZE;
 }
 
 void 

@@ -17,6 +17,11 @@ struct entry *table[NBUCKET];
 int keys[NKEYS];
 int nthread = 1;
 
+// 如果让整个哈希表互斥的话，粒度太大了
+// 只需要保证对桶(链表)的“写”操作互斥即可，因此每个桶对应一把锁
+// 这样，对不同桶的操作仍可并发。
+pthread_mutex_t locks[NBUCKET];
+
 double
 now()
 {
@@ -39,13 +44,15 @@ static
 void put(int key, int value)
 {
   int i = key % NBUCKET;
-
+  pthread_mutex_lock(&locks[i]);
   // is the key already present?
   struct entry *e = 0;
   for (e = table[i]; e != 0; e = e->next) {
     if (e->key == key)
       break;
   }
+
+
   if(e){
     // update the existing key.
     e->value = value;
@@ -53,6 +60,7 @@ void put(int key, int value)
     // the new is new.
     insert(key, value, &table[i], table[i]);
   }
+  pthread_mutex_unlock(&locks[i]);
 }
 
 static struct entry*
@@ -60,12 +68,12 @@ get(int key)
 {
   int i = key % NBUCKET;
 
-
+  pthread_mutex_lock(&locks[i]);
   struct entry *e = 0;
   for (e = table[i]; e != 0; e = e->next) {
     if (e->key == key) break;
   }
-
+  pthread_mutex_unlock(&locks[i]);
   return e;
 }
 
@@ -113,6 +121,10 @@ main(int argc, char *argv[])
   assert(NKEYS % nthread == 0);
   for (int i = 0; i < NKEYS; i++) {
     keys[i] = random();
+  }
+
+  for(int i = 0; i < NBUCKET; i++) {
+    pthread_mutex_init(&locks[i], NULL);
   }
 
   //
